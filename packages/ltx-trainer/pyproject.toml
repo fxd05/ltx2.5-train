@@ -29,6 +29,7 @@ dependencies = [
     "sentencepiece>=0.2.0",
     "soundfile>=0.12.1",
     "torch>=2.6.0",
+    "tensorboard>=2.20.0",
     "torchaudio>=2.7.0",
     # torchcodec must match the torch version (it ships a torch-ABI C++ extension and declares
     # no torch pin of its own). With the natten extra (torch 2.13 + cu132), keep the upper

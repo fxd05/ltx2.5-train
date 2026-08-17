@@ -6,6 +6,9 @@ dist/
 wheels/
 checkpoints/
 *.egg-info
+logs/
+data/
+outputs/
 
 # Virtual environments
 .venv

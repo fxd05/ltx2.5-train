@@ -765,6 +765,20 @@ class WandbConfig(ConfigBaseModel):
     )
 
 
+class TensorboardConfig(ConfigBaseModel):
+    """Configuration for local TensorBoard logging."""
+
+    enabled: bool = Field(
+        default=False,
+        description="Whether to write local TensorBoard event files",
+    )
+
+    log_dir: str | None = Field(
+        default=None,
+        description="TensorBoard event directory. Defaults to <output_dir>/tensorboard when unset.",
+    )
+
+
 class FlowMatchingConfig(ConfigBaseModel):
     """Configuration for flow matching training"""
 
@@ -797,6 +811,7 @@ class LtxTrainerConfig(ConfigBaseModel):
     hub: HubConfig = Field(default_factory=HubConfig)
     flow_matching: FlowMatchingConfig = Field(default_factory=FlowMatchingConfig)
     wandb: WandbConfig = Field(default_factory=WandbConfig)
+    tensorboard: TensorboardConfig = Field(default_factory=TensorboardConfig)
 
     # General configuration
     seed: int = Field(

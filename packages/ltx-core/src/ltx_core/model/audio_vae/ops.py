@@ -1,8 +1,12 @@
 import torch
-import torchaudio
 from torch import nn
 
 from ltx_core.types import Audio
+
+try:
+    import torchaudio
+except (ImportError, OSError):
+    torchaudio = None
 
 
 class AudioProcessor(nn.Module):
@@ -16,6 +20,11 @@ class AudioProcessor(nn.Module):
         n_fft: int,
     ) -> None:
         super().__init__()
+        if torchaudio is None:
+            raise RuntimeError(
+                "Audio processing requires a torchaudio build compatible with the installed PyTorch. "
+                "RGB-only inference does not require torchaudio."
+            )
         self.target_sample_rate = target_sample_rate
         self.mel_transform = torchaudio.transforms.MelSpectrogram(
             sample_rate=target_sample_rate,

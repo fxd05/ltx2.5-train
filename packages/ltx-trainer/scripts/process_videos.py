@@ -22,7 +22,6 @@ from typing import Any
 import numpy as np
 import pandas as pd
 import torch
-import torchaudio
 import typer
 from accelerate import PartialState
 from pillow_heif import register_heif_opener
@@ -56,6 +55,11 @@ from ltx_trainer.model_loader import (
 )
 from ltx_trainer.utils import open_image_as_srgb
 from ltx_trainer.video_utils import get_video_frame_count, read_video
+
+try:
+    import torchaudio
+except (ImportError, OSError):
+    torchaudio = None
 
 disable_progress_bar()
 
@@ -1257,6 +1261,8 @@ def _load_paths_from_dataset(dataset_file: Path, column: str) -> list[Path]:
 def _load_audio_from_file(audio_path: Path, max_duration: float | None = None) -> Audio | None:
     """Load audio from an audio or video file, optionally trimming to max_duration."""
     try:
+        if torchaudio is None:
+            raise RuntimeError("Audio preprocessing requires a torchaudio build compatible with the installed PyTorch.")
         waveform, sample_rate = torchaudio.load(str(audio_path))
     except Exception:
         logger.debug(f"Could not load audio from {audio_path}")

@@ -12,7 +12,6 @@ Basic usage:
 from pathlib import Path
 
 import torch
-import torchaudio
 import torchvision.utils
 import typer
 from einops import rearrange
@@ -38,6 +37,11 @@ from ltx_trainer.model_loader import (
     resolve_video_vae_path,
 )
 from ltx_trainer.video_utils import save_video
+
+try:
+    import torchaudio
+except (ImportError, OSError):
+    torchaudio = None
 
 DEFAULT_TILE_SIZE_PIXELS = 512  # Spatial tile size in pixels (must be ≥64 and divisible by 32)
 DEFAULT_TILE_OVERLAP_PIXELS = 128  # Spatial tile overlap in pixels (must be divisible by 32)
@@ -306,6 +310,8 @@ class LatentsDecoder:
         # Save as WAV
         output_path = output_dir / f"{latent_file.stem}.wav"
         sample_rate = self.vocoder.output_sampling_rate
+        if torchaudio is None:
+            raise RuntimeError("Audio decoding requires a torchaudio build compatible with the installed PyTorch.")
         torchaudio.save(str(output_path), waveform[0].cpu(), sample_rate)
 
 

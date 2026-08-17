@@ -30,6 +30,7 @@ from torch.optim.lr_scheduler import (
     StepLR,
 )
 from torch.utils.data import DataLoader
+from torch.utils.tensorboard import SummaryWriter
 
 from ltx_core.text_encoders.gemma import convert_to_additive_mask
 from ltx_trainer import logger
@@ -130,6 +131,7 @@ class LtxvTrainer:
         self._training_state_size_warned = False
         self._sigma_tracker = SigmaBucketTracker()
         self._wandb_run = None
+        self._tensorboard_writer: SummaryWriter | None = None
 
     def train(  # noqa: PLR0912, PLR0915
         self,
@@ -174,6 +176,8 @@ class LtxvTrainer:
         self._accelerator.wait_for_everyone()
 
         Path(cfg.output_dir).mkdir(parents=True, exist_ok=True)
+
+        self._init_tensorboard()
 
         # Save the training configuration as YAML
         self._save_config()
@@ -282,7 +286,7 @@ class LtxvTrainer:
                         advance=is_optimization_step,
                     )
 
-                    # Log metrics to W&B (only on main process and optimization steps)
+                    # Log metrics to external and local monitoring backends on optimization steps.
                     if IS_MAIN_PROCESS and is_optimization_step:
                         # Track per-element loss by sigma bucket
                         self._sigma_tracker.update(output.sigma.cpu().tolist(), output.loss.detach().cpu().tolist())
@@ -291,6 +295,9 @@ class LtxvTrainer:
                             "train/learning_rate": current_lr,
                             "train/step_time": step_time,
                             "train/global_step": self._global_step,
+                            "system/gpu_memory_allocated_gb": torch.cuda.memory_allocated(device) / 1024**3,
+                            "system/gpu_memory_reserved_gb": torch.cuda.memory_reserved(device) / 1024**3,
+                            "system/gpu_memory_peak_allocated_gb": torch.cuda.max_memory_allocated(device) / 1024**3,
                         }
                         metrics.update(self._sigma_tracker.get_metrics())
                         self._log_metrics(metrics)
@@ -345,16 +352,19 @@ class LtxvTrainer:
             if cfg.hub.push_to_hub:
                 push_to_hub(saved_path, sampled_videos_paths, self._config)
 
-            # Log final stats to W&B
+            self._log_metrics(
+                {
+                    "stats/total_time_minutes": stats.total_time_seconds / 60,
+                    "stats/steps_per_second": stats.steps_per_second,
+                    "stats/samples_per_second": stats.samples_per_second,
+                    "stats/peak_gpu_memory_gb": stats.peak_gpu_memory_gb,
+                }
+            )
+
+            if self._tensorboard_writer is not None:
+                self._tensorboard_writer.close()
+
             if self._wandb_run is not None:
-                self._log_metrics(
-                    {
-                        "stats/total_time_minutes": stats.total_time_seconds / 60,
-                        "stats/steps_per_second": stats.steps_per_second,
-                        "stats/samples_per_second": stats.samples_per_second,
-                        "stats/peak_gpu_memory_gb": stats.peak_gpu_memory_gb,
-                    }
-                )
                 self._wandb_run.finish()
 
         self._accelerator.wait_for_everyone()
@@ -619,13 +629,13 @@ class LtxvTrainer:
     def _prepare_models_for_training(self) -> None:
         """Prepare models for training with Accelerate."""
 
-        # For FSDP + LoRA: Cast entire model to FP32.
-        # FSDP requires uniform dtype across all parameters in wrapped modules.
-        # In LoRA mode, PEFT creates LoRA params in FP32 while base model is BF16.
-        # We cast the base model to FP32 to match the LoRA params.
+        # For FSDP + LoRA, keep every trainable and frozen parameter in BF16.
+        # FSDP requires uniform dtype across wrapped modules. PEFT creates LoRA
+        # parameters in FP32 by default, while LTX checkpoints are BF16. Casting
+        # the adapter parameters down avoids expanding the 22B base model to FP32.
         if self._accelerator.distributed_type == DistributedType.FSDP and self._config.model.training_mode == "lora":
-            logger.debug("FSDP: casting transformer to FP32 for uniform dtype")
-            self._transformer = self._transformer.to(dtype=torch.float32)
+            logger.debug("FSDP: casting transformer and LoRA adapters to BF16 for uniform dtype")
+            self._transformer = self._transformer.to(dtype=torch.bfloat16)
 
         # Enable gradient checkpointing if requested
         # For PeftModel, we need to access the underlying base model
@@ -1123,7 +1133,30 @@ class LtxvTrainer:
         run = wandb.init(**init_kwargs)
         self._wandb_run = run
 
+    def _init_tensorboard(self) -> None:
+        """Initialize the local TensorBoard writer on the main process."""
+        if not self._config.tensorboard.enabled or not IS_MAIN_PROCESS:
+            self._tensorboard_writer = None
+            return
+
+        configured_log_dir = self._config.tensorboard.log_dir
+        log_dir = Path(configured_log_dir) if configured_log_dir else Path(self._config.output_dir) / "tensorboard"
+        log_dir.mkdir(parents=True, exist_ok=True)
+
+        self._tensorboard_writer = SummaryWriter(log_dir=str(log_dir))
+        self._tensorboard_writer.add_text(
+            "run/config",
+            f"```yaml\n{yaml.dump(self._config.model_dump(), default_flow_style=False)}\n```",
+            global_step=0,
+        )
+        self._tensorboard_writer.flush()
+        logger.info(f"📈 TensorBoard logging enabled: {log_dir}")
+
     def _log_metrics(self, metrics: dict[str, float]) -> None:
-        """Log metrics to Weights & Biases."""
+        """Log metrics to configured external and local monitoring backends."""
         if self._wandb_run is not None:
             self._wandb_run.log(metrics)
+        if self._tensorboard_writer is not None:
+            for name, value in metrics.items():
+                self._tensorboard_writer.add_scalar(name, value, self._global_step)
+            self._tensorboard_writer.flush()
