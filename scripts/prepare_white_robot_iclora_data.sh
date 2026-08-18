@@ -10,7 +10,7 @@ max_samples="${MAX_SAMPLES:-0}"
 device="${DEVICE:-cuda:0}"
 load_text_encoder_in_8bit="${LOAD_TEXT_ENCODER_IN_8BIT:-1}"
 overwrite="${OVERWRITE:-0}"
-resolution_buckets="${RESOLUTION_BUCKETS:-512x384x121}"
+resolution_buckets="${RESOLUTION_BUCKETS:-640x480x121}"
 
 cd "$repo_root"
 #bash scripts/setup_world_model_training_env.sh

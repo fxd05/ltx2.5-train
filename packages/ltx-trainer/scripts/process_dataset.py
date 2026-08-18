@@ -18,6 +18,7 @@ Basic usage:
         --model-path /path/to/ltx-checkpoint.safetensors --text-encoder-path /path/to/gemma-root
 """
 
+import os
 from pathlib import Path
 
 import typer
@@ -76,6 +77,7 @@ def preprocess_dataset(  # noqa: PLR0912, PLR0913, PLR0915
     overwrite: bool = False,
 ) -> None:
     """Run the preprocessing pipeline with convention-based column detection."""
+    device = _resolve_process_device(device)
     _validate_dataset_file(dataset_file)
 
     # Video VAE compression factors, derived from the checkpoint config (default 32x32x8).
@@ -276,6 +278,17 @@ def preprocess_dataset(  # noqa: PLR0912, PLR0913, PLR0915
     logger.info(f"Dataset preprocessing complete! Results saved to {output_base}")
     produced = [d.name for d in output_base.iterdir() if d.is_dir() and not d.name.startswith("decoded")]
     logger.info(f"Output directories: {', '.join(sorted(produced))}")
+
+
+def _resolve_process_device(device: str) -> str:
+    """Bind generic CUDA device requests to this Accelerate process's local GPU."""
+    local_rank = os.environ.get("LOCAL_RANK")
+    if local_rank is None or device not in {"cuda", "cuda:0"}:
+        return device
+
+    resolved_device = f"cuda:{local_rank}"
+    logger.info(f"Accelerate LOCAL_RANK={local_rank}: using device {resolved_device}")
+    return resolved_device
 
 
 def _validate_dataset_file(dataset_path: str) -> None:

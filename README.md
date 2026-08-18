@@ -14,6 +14,8 @@
 
 ## 🚀 Quick Start
 
+> **Robotics world model:** for the Chinese end-to-end guide to train a white-robot-reference-to-RGB V2V IC-LoRA on RoboTwin data, see [白膜机械臂到 RGB 世界模型训练指南](WHITE_ROBOT_ICLORA_TRAINING.md).
+
 Clone the repo
 
 ```bash

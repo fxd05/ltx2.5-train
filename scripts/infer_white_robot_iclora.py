@@ -77,14 +77,14 @@ def parse_args() -> argparse.Namespace:
     generation.add_argument(
         "--height",
         type=int,
-        default=384,
-        help="Output height. Two-stage LTX requires a multiple of 64 (default: 384).",
+        default=480,
+        help="Final output height (default: 480). The two-stage pipeline uses a compatible internal size when needed.",
     )
     generation.add_argument(
         "--width",
         type=int,
-        default=512,
-        help="Output width. Two-stage LTX requires a multiple of 64 (default: 512).",
+        default=640,
+        help="Final output width (default: 640). The two-stage pipeline uses a compatible internal size when needed.",
     )
     generation.add_argument("--num-frames", type=int, default=121)
     generation.add_argument("--frame-rate", type=float, default=24.0)
@@ -131,16 +131,70 @@ def resolve_inputs(args: argparse.Namespace) -> tuple[Path, Path, str, Path]:
     return first_frame, reference_video, prompt, output_path
 
 
+def resolve_generation_resolution(output_height: int, output_width: int) -> tuple[int, int]:
+    """Choose a 64-aligned internal generation size with the closest aspect ratio."""
+    if output_height % 64 == 0 and output_width % 64 == 0:
+        return output_height, output_width
+
+    output_aspect_ratio = output_width / output_height
+    candidates = [
+        (height, width)
+        for height in range(64, output_height + 1, 64)
+        for width in range(64, output_width + 1, 64)
+    ]
+    if not candidates:
+        raise ValueError("--height and --width must both be at least 64.")
+
+    return min(
+        candidates,
+        key=lambda size: (
+            abs(size[1] / size[0] - output_aspect_ratio),
+            abs(size[0] * size[1] - output_height * output_width),
+        ),
+    )
+
+
+def resize_video(input_path: Path, output_path: Path, width: int, height: int) -> None:
+    """Resize an MP4 to the requested output dimensions without cropping."""
+    import av
+
+    with av.open(input_path) as input_container:
+        input_stream = next((stream for stream in input_container.streams if stream.type == "video"), None)
+        if input_stream is None:
+            raise ValueError(f"No video stream found in generated file: {input_path}")
+
+        frame_rate = input_stream.average_rate or 24
+        with av.open(output_path, mode="w") as output_container:
+            output_stream = output_container.add_stream("libx264", rate=frame_rate)
+            output_stream.width = width
+            output_stream.height = height
+            output_stream.pix_fmt = "yuv420p"
+
+            for frame in input_container.decode(input_stream):
+                resized_frame = frame.reformat(width=width, height=height, format="yuv420p")
+                for packet in output_stream.encode(resized_frame):
+                    output_container.mux(packet)
+            for packet in output_stream.encode():
+                output_container.mux(packet)
+
+
 def main() -> int:
     args = parse_args()
     if args.ic_lora_path.name == STOCK_DISTILLED_LORA:
         raise ValueError("The stock distilled LoRA is not a white-robot IC-LoRA. Supply a trained IC-LoRA checkpoint.")
     if args.num_frames < 9 or (args.num_frames - 1) % 8:
         raise ValueError("--num-frames must be 8k+1, for example 121 or 241.")
-    if args.height % 64 or args.width % 64:
-        raise ValueError("--height and --width must be divisible by 64 for the two-stage IC-LoRA pipeline.")
+    if args.height < 64 or args.width < 64:
+        raise ValueError("--height and --width must both be at least 64.")
 
     first_frame, reference_video, prompt, output_path = resolve_inputs(args)
+    generation_height, generation_width = resolve_generation_resolution(args.height, args.width)
+    resize_required = (generation_height, generation_width) != (args.height, args.width)
+    native_output_path = (
+        output_path.with_name(f"{output_path.stem}_native_{generation_width}x{generation_height}{output_path.suffix}")
+        if resize_required
+        else output_path
+    )
     components = {
         "--transformer-path": "diffusion_models/ltx-2.5-22b-distilled-transformer-bf16.safetensors",
         "--text-encoder-path": "text_encoders/gemma4-12b-with-proj-ltx-2.5-bf16.safetensors",
@@ -156,10 +210,10 @@ def main() -> int:
         "--image", str(first_frame), "0", str(args.image_strength),
         "--video-conditioning", str(reference_video), str(args.reference_strength),
         "--prompt", prompt,
-        "--height", str(args.height), "--width", str(args.width),
+        "--height", str(generation_height), "--width", str(generation_width),
         "--num-frames", str(args.num_frames), "--frame-rate", str(args.frame_rate),
         "--seed", str(args.seed), "--offload", args.offload,
-        "--output-path", str(output_path),
+        "--output-path", str(native_output_path),
     ))
     if args.quantization != "none":
         command.extend(("--quantization", args.quantization))
@@ -167,9 +221,18 @@ def main() -> int:
         command.append("--skip-stage-2")
 
     print("Executing:\n" + shlex.join(command), flush=True)
+    if resize_required:
+        print(
+            f"Resizing pipeline output {generation_width}x{generation_height} to final "
+            f"{args.width}x{args.height}: {output_path}",
+            flush=True,
+        )
     if not args.dry_run:
         output_path.parent.mkdir(parents=True, exist_ok=True)
         subprocess.run(command, check=True)
+        if resize_required:
+            resize_video(native_output_path, output_path, args.width, args.height)
+            native_output_path.unlink()
         print(f"Generated RGB video: {output_path}", flush=True)
     return 0
 

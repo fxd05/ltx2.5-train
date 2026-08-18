@@ -133,10 +133,10 @@ training_strategy:
         # Probability of applying reference conditioning per training sample
         probability: 1.0
 
-      # Optional first-frame conditioning to improve I2V capabilities
-      # At low probability, this teaches the model to also accept first-frame input
+      # Always condition on the target RGB video's first frame during training.
+      # This matches inference that supplies a first-frame input.
       - type: first_frame
-        probability: 0.2
+        probability: 1.0
 
 # -----------------------------------------------------------------------------
 # Optimization Configuration
@@ -296,9 +296,9 @@ checkpoints:
   # Set to null to disable intermediate checkpoints
   interval: 250
 
-  # Number of most recent checkpoints to keep
-  # Set to -1 to keep all checkpoints
-  keep_last_n: 3
+  # Disable automatic cleanup so every saved checkpoint remains available for comparison.
+  # Set to a positive value only when disk usage must be capped.
+  keep_last_n: -1
 
   # Precision to use when saving checkpoint weights
   # Options: "bfloat16" (default, smaller files) or "float32" (full precision)

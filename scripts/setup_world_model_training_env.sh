@@ -25,6 +25,7 @@ import optimum
 import pandas
 import peft
 import pydantic
+import tensorboard
 import wandb
 PY
 then
@@ -35,7 +36,7 @@ then
         "bitsandbytes>=0.45.2" "google-genai>=2.0" "imageio>=2.37.0" "imageio-ffmpeg>=0.6.0" \
         "openai>=2.0" "opencv-python-headless>=4.11.0.86" "optimum-quanto>=0.2.6" "pandas>=2.2.3" \
         "peft>=0.14.0" "pillow-heif>=0.21.0" "pydantic>=2.10.4" "rich>=13.9.4" \
-        "scenedetect>=0.6.5.2" "sentencepiece>=0.2.0" "soundfile>=0.12.1" "typer>=0.15.1" "wandb>=0.27.0"
+        "scenedetect>=0.6.5.2" "sentencepiece>=0.2.0" "soundfile>=0.12.1" "tensorboard>=2.20.0" "typer>=0.15.1" "wandb>=0.27.0"
 fi
 
 "$venv_python" - <<'PY'
