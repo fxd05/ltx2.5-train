@@ -139,7 +139,7 @@ bash scripts/prepare_white_robot_iclora_data.sh
 ```bash
 cd "$REPO"
 GPU_IDS=2,4,5,6 \
-MIN_FREE_GB=100 \
+MIN_FREE_GB=40 \
 RESOLUTION_BUCKETS=640x480x121 \
 MANIFEST_PATH="$REPO/data/white_robot_iclora_train_640x480x121.jsonl" \
 PREPROCESSED_ROOT="$REPO/data/white_robot_iclora_preprocessed_640x480x121" \
@@ -183,7 +183,7 @@ logs/checkpoint_eval/
 
 ```bash
 cd "$REPO"
-EVAL_GPU_ID=5 MIN_FREE_GB=100 POLL_SECONDS=300 \
+EVAL_GPU_ID=5 MIN_FREE_GB=40 POLL_SECONDS=300 \
   nohup bash scripts/watch_white_robot_checkpoint_evaluation.sh \
   > logs/checkpoint_eval/watchdog.stdout.log 2>&1 &
 ```
@@ -223,7 +223,7 @@ nvidia-smi
 ```bash
 cd "$REPO"
 GPU_IDS=0,1,2,3 \
-MIN_FREE_GB=100 \
+MIN_FREE_GB=40 \
 CONFIG_PATH="$REPO/configs/white_robot_to_rgb_iclora.yaml" \
 PREPROCESSED_ROOT="$REPO/data/white_robot_iclora_preprocessed_640x480x121" \
 bash scripts/train_white_robot_iclora_multigpu.sh
@@ -241,7 +241,7 @@ bash scripts/train_white_robot_iclora_multigpu.sh
 
 ```bash
 GPU_IDS=2,4,5,6 \
-MIN_FREE_GB=100 \
+MIN_FREE_GB=40 \
 CONFIG_PATH="$REPO/configs/white_robot_to_rgb_iclora.yaml" \
 PREPROCESSED_ROOT="$REPO/data/white_robot_iclora_preprocessed_640x480x121" \
 bash scripts/train_white_robot_iclora_multigpu.sh
@@ -255,7 +255,79 @@ GPU_IDS=0,1,2,3 SKIP_GPU_CHECK=1 bash scripts/train_white_robot_iclora_multigpu.
 
 仅在你确认这些 GPU 的占用归属时使用 `SKIP_GPU_CHECK=1`；它不会释放或终止其他任务。多卡能提高吞吐，但要求所有参与卡在整个作业期间都可用。此前共享卡被外部进程抢占会导致单个 rank OOM，并使所有 rank 停止。
 
-### 5.3 8 样本、300 step 过拟合测试
+### 5.3 多机多卡 FSDP 训练
+
+多机训练使用 `scripts/train_white_robot_iclora_multinode.sh`，其环境变量约定与
+`minimax-H3-PPU/train_dit_lora_multinode.sh` 一致。平台需要在**每台参与机器**注入：
+
+```text
+NODE_NUM    # 总机器数
+RANK        # 当前机器编号，范围为 0 到 NODE_NUM-1
+GPU_NUM     # 当前机器使用的 GPU 数
+MASTER_ADDR # rank 0 机器可被所有节点访问的地址
+MASTER_PORT # rendezvous 端口
+```
+
+LTX launcher 会将它们映射为 `accelerate launch` 的 `--num_machines`、`--machine_rank`、
+`--num_processes`、`--main_process_ip` 和 `--main_process_port`。`NUM_PROCESSES` 如显式设置，
+必须等于全局 world size，即 `NODE_NUM * GPU_NUM`。所有节点必须能访问同一份代码、模型、预处理数据和输出目录。
+
+例如，2 台机器、每台 4 张卡时，在每台机器上分别执行（`RANK` 不同，其余共享）：
+
+```bash
+cd "$REPO"
+NODE_NUM=2 \
+RANK=0 \
+GPU_NUM=4 \
+GPU_IDS=0,1,2,3 \
+MASTER_ADDR=10.0.0.10 \
+MASTER_PORT=29500 \
+RUN_ID=white_2n4g_run1 \
+PREPROCESSED_ROOT="$REPO/data/white_1000x121" \
+CONFIG_PATH="$REPO/configs/white_robot_to_rgb_iclora.yaml" \
+bash scripts/train_white_robot_iclora_multinode.sh
+```
+
+在另一台机器上将 `RANK=1`，并保持 `NODE_NUM`、`GPU_NUM`、`MASTER_ADDR`、`MASTER_PORT`、
+`RUN_ID`、数据和配置路径完全一致。默认会在 `logs/` 下为每个节点生成独立日志，rank 0 会先创建共享的运行时 YAML，其他节点最多等待 120 秒。启动前可加 `DRY_RUN=1 SKIP_GPU_CHECK=1` 只验证环境变量和组装后的启动参数，不会发起训练。
+
+### 5.4 串行执行多机预处理和训练
+
+`scripts/run_white_robot_iclora_multinode_pipeline.sh` 是多机训练的总控脚本：它只在
+`RANK=0` 上运行现有的多卡预处理脚本；预处理成功后，其他节点通过共享
+`PREPROCESSED_ROOT` 下的状态文件获知完成状态，并且所有节点再调用既有的
+`scripts/train_white_robot_iclora_multinode.sh`。它不改变预处理或训练的内部实现。
+
+所有节点依旧需要共享代码、模型、原始数据、`PREPROCESSED_ROOT` 和输出目录。请为每一轮
+pipeline 使用新的 `RUN_ID`（或显式的 `PIPELINE_ID`），避免复用旧状态文件。默认最长等待
+24 小时；可通过 `PREPROCESS_WAIT_TIMEOUT_SECONDS` 和 `PREPROCESS_POLL_INTERVAL_SECONDS`
+调整等待策略。
+
+例如，2 台机器、每台 4 张卡时，在每台机器上执行下列命令；只把第二台的 `RANK` 改为 `1`：
+
+```bash
+cd "$REPO"
+NODE_NUM=2 \
+RANK=0 \
+GPU_NUM=4 \
+GPU_IDS=0,1,2,3 \
+MASTER_ADDR=10.0.0.10 \
+MASTER_PORT=29500 \
+RUN_ID=cut121_2n4g_run1 \
+PIPELINE_ID=cut121_2n4g_run1 \
+DATA_ROOT=/lpai/volumes/mind-eb-ali-sh/dulingyi/sunyilu/RoboTwin2_0_cleaned_cut/cut121/white \
+MANIFEST_PATH="$REPO/data/cut121_white_train_640x480x121.jsonl" \
+PREPROCESSED_ROOT="$REPO/data/cut121_white_preprocessed_640x480x121" \
+CONFIG_PATH="$REPO/configs/white_robot_to_rgb_iclora.yaml" \
+bash scripts/run_white_robot_iclora_multinode_pipeline.sh
+```
+
+rank 0 会在预处理期间占用其本机指定 GPU；其他节点只等待，不会重复预处理。成功后所有
+节点开始 FSDP 训练。若 rank 0 预处理失败，其他节点会读取共享失败状态并退出。该总控脚本
+当前要求每台机器至少 2 张 GPU，因为它复用 `prepare_white_robot_iclora_data_multigpu.sh`。
+可添加 `DRY_RUN=1` 来只检查 pipeline 参数与路径编排，不执行预处理或训练。
+
+### 5.5 8 样本、300 step 过拟合测试
 
 该配置用于确认 loss 可下降、checkpoint 能保存、TensorBoard 能写入。它不是泛化训练。
 
@@ -288,7 +360,7 @@ outputs/white_robot_to_rgb_iclora_overfit_8samples_640x480x121/checkpoints/
 
 看到 `lora_weights_step_00300.safetensors`。
 
-### 5.4 从 step 300 续训到总 1000 step
+### 5.6 从 step 300 续训到总 1000 step
 
 不要把 `steps` 理解成“额外训练步数”；它是**总目标 step**。下列配置会加载 step 300 checkpoint，并恢复 scheduler/RNG，继续到 step 1000：
 
@@ -314,7 +386,7 @@ Resuming from step 300
 
 若只希望加载 LoRA 权重而不恢复 step/scheduler，请把配置中的 `checkpoints.no_resume` 设为 `true`。这样训练会从 step 0 计数，通常不适合严格的续训实验。
 
-### 5.5 全量训练
+### 5.7 全量训练
 
 在全量 `640×480×121` 预处理数据完成后，使用：
 

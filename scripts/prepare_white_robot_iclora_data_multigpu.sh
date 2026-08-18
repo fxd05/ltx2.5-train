@@ -17,7 +17,7 @@ batch_size="${BATCH_SIZE:-1}"
 load_text_encoder_in_8bit="${LOAD_TEXT_ENCODER_IN_8BIT:-1}"
 overwrite="${OVERWRITE:-0}"
 gpu_ids="${GPU_IDS:-}"
-min_free_gb="${MIN_FREE_GB:-100}"
+min_free_gb="${MIN_FREE_GB:-40}"
 skip_gpu_check="${SKIP_GPU_CHECK:-0}"
 log_path="${LOG_PATH:-$repo_root/logs/prepare_multigpu_$(date +%Y%m%d_%H%M%S).log}"
 
